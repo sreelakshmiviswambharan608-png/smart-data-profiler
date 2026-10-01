@@ -117,7 +117,67 @@ if uploaded_file is not None:
             fig, ax = plt.subplots(figsize=(8, 4))
             shap.summary_plot(shap_values, df_num_imputed, plot_type="bar", show=False)
             st.pyplot(fig)
+            st.markdown("### Why individual rows were flagged")
+            st.caption(
+                "These explanations describe model signals and unusual values compared with this dataset. "
+                "They can suggest data-level drivers, but they do not prove a real-world causal root cause."
+            )
 
+            shap_array = np.asarray(shap_values.values)
+            if shap_array.ndim == 3:
+                model_importance = np.abs(shap_array).mean(axis=2)
+            else:
+                model_importance = np.abs(shap_array)
+
+            feature_medians = df_num.median()
+            feature_spreads = (df_num.quantile(0.75) - df_num.quantile(0.25)) / 1.349
+            mad_spreads = (df_num - feature_medians).abs().median() * 1.4826
+            feature_spreads = feature_spreads.where(feature_spreads > 0, mad_spreads)
+            standard_spreads = df_num.std()
+            feature_spreads = feature_spreads.where(feature_spreads > 0, standard_spreads)
+
+            anomaly_positions = np.flatnonzero(df["Is_Anomaly"].to_numpy())
+            for row_position in anomaly_positions[:10]:
+                ranked_features = np.argsort(model_importance[row_position])[::-1][:3]
+                row_number = row_position + 1
+
+                with st.expander(f"Row {row_number}: explanation"):
+                    st.markdown("**Strongest model signals**")
+                    signal_names = [f"{numeric_cols[index]}" for index in ranked_features]
+                    st.write(
+                        "The model relied most on these numeric features: "
+                        + ", ".join(signal_names)
+                        + ". Their combined pattern helped distinguish this row."
+                    )
+
+                    unusual_features = []
+                    for feature_index in ranked_features:
+                        feature_name = numeric_cols[feature_index]
+                        feature_value = df_num.iloc[row_position, feature_index]
+                        feature_median = feature_medians.iloc[feature_index]
+                        feature_spread = feature_spreads.iloc[feature_index]
+                        if pd.isna(feature_value) or pd.isna(feature_median) or pd.isna(feature_spread) or feature_spread <= 0:
+                            continue
+
+                        distance = abs(feature_value - feature_median) / feature_spread
+                        if distance >= 2.5:
+                            direction = "high" if feature_value > feature_median else "low"
+                            unusual_features.append(
+                                f"{feature_name} is unusually {direction}: "
+                                f"{feature_value:g}, versus a dataset median of {feature_median:g} "
+                                f"({distance:.1f} robust spread units away)."
+                            )
+
+                    st.markdown("**Likely data-level drivers**")
+                    if unusual_features:
+                        for explanation in unusual_features:
+                            st.write(f"- {explanation}")
+                    else:
+                        st.write(
+                            "No single top-ranked feature is strongly unusual on its own. "
+                            "The model may have flagged an unusual combination of values; "
+                            "review these features together with similar rows."
+                    )
     # ==========================================
     # TAB 3: LLM HEALTH ASSISTANT / EXECUTIVE SUMMARY
     # ==========================================
